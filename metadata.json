@@ -1,0 +1,5 @@
+{
+  "name": "AI Historical Video Builder",
+  "description": "Automatically create historical YouTube video content: generate a story, turn each scene into an image prompt, create images from the prompts, and download all assets.",
+  "requestFramePermissions": []
+}
