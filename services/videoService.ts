@@ -2,11 +2,12 @@ declare const saveAs: any;
 
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
-interface VideoCreationOptions {
+export interface VideoCreationOptions {
     imageBlobs: Blob[];
     audioBlobs: (Blob | null)[];
-    secondsPerImage: number;
+    durations: number[];
     orientation: '16:9' | '9:16';
+    quality: '720p' | '1080p';
     onProgress: (current: number, total: number, task: string) => void;
     fileName: string;
 }
@@ -15,7 +16,7 @@ interface VideoCreationOptions {
  * Decodes raw PCM audio data (Int16) into an AudioBuffer for playback.
  * The Gemini TTS model returns audio at a 24000Hz sample rate.
  */
-async function decodePcmData(
+export async function decodePcmData(
   data: ArrayBuffer,
   ctx: AudioContext,
   sampleRate: number = 24000,
@@ -38,13 +39,18 @@ async function decodePcmData(
 export const createVideo = async ({
     imageBlobs,
     audioBlobs,
-    secondsPerImage,
+    durations,
     orientation,
+    quality,
     onProgress,
     fileName
 }: VideoCreationOptions): Promise<void> => {
     return new Promise(async (resolve, reject) => {
-        const [width, height] = orientation === '16:9' ? [1280, 720] : [720, 1280];
+        const resolutions = {
+            '720p': orientation === '16:9' ? [1280, 720] : [720, 1280],
+            '1080p': orientation === '16:9' ? [1920, 1080] : [1080, 1920],
+        };
+        const [width, height] = resolutions[quality];
         
         const canvas = document.createElement('canvas');
         canvas.width = width;
@@ -80,9 +86,15 @@ export const createVideo = async ({
                return reject(new Error(`Video format ${fallbackMimeType} is not supported by your browser.`));
             }
         }
+        
+        const bitsPerSecond = {
+            '720p': 2_500_000,
+            '1080p': 5_000_000,
+        };
 
-        const recorder = new MediaRecorder(combinedStream, { mimeType });
+        const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: bitsPerSecond[quality] });
         const recordedChunks: Blob[] = [];
+        const activeAudioSources = new Set<AudioBufferSourceNode>();
 
         recorder.ondataavailable = (event) => {
             if (event.data.size > 0) {
@@ -92,6 +104,7 @@ export const createVideo = async ({
 
         recorder.onstop = () => {
             onProgress(1, 1, 'Finalizing video file...');
+            activeAudioSources.forEach(s => s.stop());
             const videoBlob = new Blob(recordedChunks, { type: mimeType });
             saveAs(videoBlob, `${fileName}.webm`);
             audioContext?.close();
@@ -99,6 +112,7 @@ export const createVideo = async ({
         };
 
         recorder.onerror = (event) => {
+            activeAudioSources.forEach(s => s.stop());
             audioContext?.close();
             reject((event as any).error || new Error("MediaRecorder error"));
         };
@@ -106,19 +120,35 @@ export const createVideo = async ({
         recorder.start();
 
         const drawFrame = (img: ImageBitmap) => {
-            const hRatio = canvas.width / img.width;
-            const vRatio = canvas.height / img.height;
-            const ratio = Math.min(hRatio, vRatio);
-            const centerShift_x = (canvas.width - img.width * ratio) / 2;
-            const centerShift_y = (canvas.height - img.height * ratio) / 2;
-            
+            const imgAspectRatio = img.width / img.height;
+            const canvasAspectRatio = canvas.width / canvas.height;
+            let sx, sy, sWidth, sHeight;
+
+            if (imgAspectRatio > canvasAspectRatio) {
+                // Image is wider than canvas, crop sides
+                sHeight = img.height;
+                sWidth = sHeight * canvasAspectRatio;
+                sx = (img.width - sWidth) / 2;
+                sy = 0;
+            } else {
+                // Image is taller than canvas, crop top/bottom
+                sWidth = img.width;
+                sHeight = sWidth / canvasAspectRatio;
+                sx = 0;
+                sy = (img.height - sHeight) / 2;
+            }
+
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.fillRect(0, 0, width, height); // Black background
-            ctx.drawImage(img, 0, 0, img.width, img.height, centerShift_x, centerShift_y, img.width * ratio, img.height * ratio);
+            ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, canvas.width, canvas.height);
         };
+
 
         for (let i = 0; i < imageBlobs.length; i++) {
             try {
+                // Stop all previous audio sources to prevent overlap
+                activeAudioSources.forEach(s => s.stop());
+                activeAudioSources.clear();
+
                 const imgBlob = imageBlobs[i];
                 const audioBlob = audioBlobs[i];
                 onProgress(i, imageBlobs.length, `Stitching scene ${i + 1}/${imageBlobs.length}...`);
@@ -126,7 +156,7 @@ export const createVideo = async ({
                 const img = await createImageBitmap(imgBlob);
                 drawFrame(img);
                 
-                let durationMs = secondsPerImage * 1000;
+                let durationMs = durations[i] * 1000;
 
                 if (audioBlob && audioContext && audioDestination) {
                     const arrayBuffer = await audioBlob.arrayBuffer();
@@ -135,7 +165,7 @@ export const createVideo = async ({
                     source.buffer = audioBuffer;
                     source.connect(audioDestination);
                     source.start();
-                    durationMs = audioBuffer.duration * 1000;
+                    activeAudioSources.add(source);
                 }
                 
                 await delay(durationMs);

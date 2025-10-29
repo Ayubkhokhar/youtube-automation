@@ -4,16 +4,17 @@ const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 /**
  * Generates a story from a historical topic.
- * @param apiKey The Google AI API key.
  * @param topic The historical topic.
  * @param storyLength The desired character length of the story.
+ * @param numScenes The exact number of scenes to generate.
+ * @param apiKey The user-provided API key.
  * @returns A promise that resolves to an array of scene descriptions.
  */
-export const generateStoryFromTopic = async (apiKey: string, topic: string, storyLength: number): Promise<string[]> => {
+export const generateStoryFromTopic = async (topic: string, storyLength: number, numScenes: number, apiKey: string): Promise<string[]> => {
   const ai = new GoogleGenAI({ apiKey });
   const prompt = `Create a detailed story about the historical topic: "${topic}".
 The story should be approximately ${storyLength} characters long.
-Divide the story into 8-15 distinct scenes, each representing a key visual moment.
+Divide the story into exactly ${numScenes} distinct scenes, each representing a key visual moment.
 Each scene description should be a single paragraph.`;
 
   const maxRetries = 3;
@@ -31,7 +32,7 @@ Each scene description should be a single paragraph.`;
             properties: {
               scenes: {
                 type: Type.ARRAY,
-                description: "An array of strings, where each string is a scene description.",
+                description: `An array of strings, where each string is a scene description. There should be exactly ${numScenes} scenes.`,
                 items: { type: Type.STRING }
               }
             }
@@ -42,7 +43,7 @@ Each scene description should be a single paragraph.`;
       const jsonText = response.text.trim();
       const result = JSON.parse(jsonText);
       
-      if (!result.scenes || !Array.isArray(result.scenes) || result.scenes.length < 5) {
+      if (!result.scenes || !Array.isArray(result.scenes) || result.scenes.length < (numScenes * 0.8)) { // Allow for slight deviation
         throw new Error("Failed to parse a sufficient number of scenes. The model response might be in an unexpected format or the topic too narrow.");
       }
 
@@ -75,12 +76,12 @@ Each scene description should be a single paragraph.`;
 
 /**
  * Generates multiple AI image prompts for a scene description.
- * @param apiKey The Google AI API key.
  * @param description The description of the scene.
  * @param numVariations The number of prompts to generate.
+ * @param apiKey The user-provided API key.
  * @returns A promise that resolves to an array of cinematic image prompts.
  */
-export const generatePromptsForScene = async (apiKey: string, description: string, numVariations: number): Promise<string[]> => {
+export const generatePromptsForScene = async (description: string, numVariations: number, apiKey: string): Promise<string[]> => {
   const ai = new GoogleGenAI({ apiKey });
   const prompt = `Your task is to act as a prompt engineer for a historical illustration AI. This AI has strict safety filters and will reject prompts that are too graphic, violent, or sensitive.
 
@@ -153,12 +154,12 @@ Generate the prompts.`;
 
 /**
  * Generates an image from a prompt with a retry mechanism for rate limiting.
- * @param apiKey The Google AI API key.
  * @param prompt The image generation prompt.
  * @param aspectRatio The desired aspect ratio for the image ('16:9' or '9:16').
+ * @param apiKey The user-provided API key.
  * @returns A promise that resolves to an object containing the base64 data URL and the image blob.
  */
-export const generateImageFromPrompt = async (apiKey: string, prompt: string, aspectRatio: '16:9' | '9:16'): Promise<{ dataUrl: string; blob: Blob }> => {
+export const generateImageFromPrompt = async (prompt: string, aspectRatio: '16:9' | '9:16', apiKey: string): Promise<{ dataUrl: string; blob: Blob }> => {
   const ai = new GoogleGenAI({ apiKey });
   const maxRetries = 3;
   let attempt = 0;
@@ -228,13 +229,13 @@ const decode = (base64: string) => {
 
 /**
  * Generates audio from text using a TTS model.
- * @param apiKey The Google AI API key.
  * @param text The text to convert to speech.
  * @param voiceName The name of the prebuilt voice to use.
  * @param stylePrompt An optional prompt to guide the voice style.
+ * @param apiKey The user-provided API key.
  * @returns A promise that resolves to an audio Blob.
  */
-export const generateAudioFromText = async (apiKey: string, text: string, voiceName: string, stylePrompt: string): Promise<Blob> => {
+export const generateAudioFromText = async (text: string, voiceName: string, stylePrompt: string, apiKey: string): Promise<Blob> => {
   const ai = new GoogleGenAI({ apiKey });
   
   const fullPrompt = stylePrompt ? `${stylePrompt}: ${text}` : text;
@@ -289,4 +290,50 @@ export const generateAudioFromText = async (apiKey: string, text: string, voiceN
     }
   }
   throw new Error("An unknown error occurred after multiple retries while generating audio.");
+};
+
+
+/**
+ * Generates a suggestion for background music based on a topic.
+ * @param topic The historical topic.
+ * @param apiKey The user-provided API key.
+ * @returns A promise that resolves to a string with the music suggestion.
+ */
+export const generateBackgroundMusicSuggestion = async (topic: string, apiKey: string): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey });
+  const prompt = `Based on the historical topic "${topic}", describe the ideal background music for a short documentary video. Be concise and evocative. Focus on mood, tempo, and key instrumentation.
+
+  Examples:
+  - Topic: The Black Death in Europe -> "A somber, slow-tempo orchestral piece with haunting cellos and violins, evoking a sense of tragedy and loss."
+  - Topic: The Golden Age of Piracy -> "An upbeat, adventurous orchestral score with swelling brass, rhythmic drums, and a hint of a sea shanty melody, creating a feeling of exploration and high-stakes action."
+  - Topic: The construction of the Great Wall of China -> "A sweeping, majestic instrumental featuring traditional Chinese instruments like the guzheng and erhu, combined with a powerful orchestral backbone to convey a sense of immense scale and enduring legacy."`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            suggestion: {
+              type: Type.STRING,
+              description: "A concise description of the suggested background music."
+            }
+          }
+        },
+      },
+    });
+    const jsonText = response.text.trim();
+    const result = JSON.parse(jsonText);
+    if (!result.suggestion) {
+      throw new Error("Model did not return a valid music suggestion.");
+    }
+    return result.suggestion;
+  } catch (error) {
+    console.error('Error generating music suggestion:', error);
+    // Don't retry for this non-critical feature to avoid blocking the user.
+    throw new Error("Failed to generate music suggestion.");
+  }
 };
