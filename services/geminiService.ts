@@ -154,6 +154,7 @@ Generate the prompts.`;
 
 /**
  * Generates an image from a prompt with a retry mechanism for rate limiting.
+ * It uses a blank canvas of the correct aspect ratio as a base for image editing to enforce dimensions.
  * @param prompt The image generation prompt.
  * @param aspectRatio The desired aspect ratio for the image ('16:9' or '9:16').
  * @param apiKey The user-provided API key.
@@ -163,16 +164,49 @@ export const generateImageFromPrompt = async (prompt: string, aspectRatio: '16:9
   const ai = new GoogleGenAI({ apiKey });
   const maxRetries = 3;
   let attempt = 0;
+
+  const CANVAS_URLS = {
+    '16:9': 'https://storage.googleapis.com/aistudio-hosting/templates/blank-canvas-16-9.png',
+    '9:16': 'https://storage.googleapis.com/aistudio-hosting/templates/blank-canvas-9-16.png',
+  };
+
+  const fetchImageAsBase64 = async (url: string) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Failed to fetch canvas from ${url}: ${response.statusText}`);
+    const blob = await response.blob();
+    return new Promise<{ data: string; mimeType: string }>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        resolve({ data: result.split(',')[1], mimeType: blob.type });
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  // Fetch the canvas once before the retry loop.
+  const { data: canvasBase64, mimeType: canvasMimeType } = await fetchImageAsBase64(CANVAS_URLS[aspectRatio]);
+
+  const canvasImagePart = {
+    inlineData: {
+      data: canvasBase64,
+      mimeType: canvasMimeType,
+    },
+  };
   
-  // Add aspect ratio to the prompt as this model doesn't have a specific config for it.
-  const fullPrompt = `${prompt}, cinematic, aspect ratio ${aspectRatio}`;
+  // The model is now editing an image, so the prompt doesn't need aspect ratio info.
+  const fullPrompt = `${prompt}, cinematic`;
 
   while (attempt < maxRetries) {
     try {
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
         contents: {
-          parts: [{ text: fullPrompt }],
+          parts: [
+            canvasImagePart,
+            { text: fullPrompt }
+          ],
         },
         config: {
           responseModalities: [Modality.IMAGE],

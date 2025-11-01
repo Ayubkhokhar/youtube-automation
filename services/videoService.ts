@@ -10,6 +10,7 @@ export interface VideoCreationOptions {
     quality: '720p' | '1080p';
     onProgress: (current: number, total: number, task: string) => void;
     fileName: string;
+    isAnimationEnabled?: boolean;
 }
 
 /**
@@ -43,7 +44,8 @@ export const createVideo = async ({
     orientation,
     quality,
     onProgress,
-    fileName
+    fileName,
+    isAnimationEnabled = false,
 }: VideoCreationOptions): Promise<void> => {
     return new Promise(async (resolve, reject) => {
         const resolutions = {
@@ -63,7 +65,7 @@ export const createVideo = async ({
         ctx.fillStyle = 'black';
         ctx.fillRect(0, 0, width, height);
         
-        const videoTrack = canvas.captureStream(25).getVideoTracks()[0];
+        const videoTrack = canvas.captureStream(30).getVideoTracks()[0];
         const hasAudio = audioBlobs && audioBlobs.some(b => b !== null);
         
         let combinedStream: MediaStream;
@@ -88,8 +90,8 @@ export const createVideo = async ({
         }
         
         const bitsPerSecond = {
-            '720p': 2_500_000,
-            '1080p': 5_000_000,
+            '720p': 5_000_000,  // Increased from 2.5M for higher quality (YouTube's recommendation)
+            '1080p': 8_000_000, // Increased from 5M for higher quality (YouTube's recommendation)
         };
 
         const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: bitsPerSecond[quality] });
@@ -119,19 +121,18 @@ export const createVideo = async ({
         
         recorder.start();
 
-        const drawFrame = (img: ImageBitmap) => {
+        const drawStaticFrame = (img: ImageBitmap) => {
+             // This function is kept for the non-animated case.
             const imgAspectRatio = img.width / img.height;
             const canvasAspectRatio = canvas.width / canvas.height;
             let sx, sy, sWidth, sHeight;
 
             if (imgAspectRatio > canvasAspectRatio) {
-                // Image is wider than canvas, crop sides
                 sHeight = img.height;
                 sWidth = sHeight * canvasAspectRatio;
                 sx = (img.width - sWidth) / 2;
                 sy = 0;
             } else {
-                // Image is taller than canvas, crop top/bottom
                 sWidth = img.width;
                 sHeight = sWidth / canvasAspectRatio;
                 sx = 0;
@@ -142,10 +143,56 @@ export const createVideo = async ({
             ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, canvas.width, canvas.height);
         };
 
+        const drawAnimatedFrame = (img: ImageBitmap, scale: number, panX: number, panY: number) => {
+            const sourceWidth = img.width / scale;
+            const sourceHeight = img.height / scale;
+            const sx = (img.width - sourceWidth) / 2 * (1 + panX);
+            const sy = (img.height - sourceHeight) / 2 * (1 + panY);
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, sx, sy, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+        };
+
+        const animateImage = (img: ImageBitmap, durationMs: number): Promise<void> => {
+            return new Promise(resolve => {
+                const startTime = performance.now();
+                
+                const zoomDirection = Math.random() > 0.5 ? 1 : -1;
+                const startScale = zoomDirection === 1 ? 1.0 : 1.15;
+                const endScale = zoomDirection === 1 ? 1.15 : 1.0;
+
+                const panXStart = Math.random() * 2 - 1;
+                const panYStart = Math.random() * 2 - 1;
+                const panXEnd = Math.random() * 2 - 1;
+                const panYEnd = Math.random() * 2 - 1;
+                
+                const easeInOutCubic = (t: number) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+                const frame = (currentTime: number) => {
+                    const elapsedTime = currentTime - startTime;
+                    let progress = Math.min(elapsedTime / durationMs, 1.0);
+                    progress = easeInOutCubic(progress);
+
+                    const currentScale = startScale + (endScale - startScale) * progress;
+                    const currentPanX = panXStart + (panXEnd - panXStart) * progress;
+                    const currentPanY = panYStart + (panYEnd - panYStart) * progress;
+                    
+                    drawAnimatedFrame(img, currentScale, currentPanX, currentPanY);
+
+                    if (elapsedTime < durationMs) {
+                        requestAnimationFrame(frame);
+                    } else {
+                        drawAnimatedFrame(img, endScale, panXEnd, panYEnd);
+                        resolve();
+                    }
+                };
+                requestAnimationFrame(frame);
+            });
+        };
+
 
         for (let i = 0; i < imageBlobs.length; i++) {
             try {
-                // Stop all previous audio sources to prevent overlap
                 activeAudioSources.forEach(s => s.stop());
                 activeAudioSources.clear();
 
@@ -154,9 +201,7 @@ export const createVideo = async ({
                 onProgress(i, imageBlobs.length, `Stitching scene ${i + 1}/${imageBlobs.length}...`);
                 
                 const img = await createImageBitmap(imgBlob);
-                drawFrame(img);
-                
-                let durationMs = durations[i] * 1000;
+                const durationMs = durations[i] * 1000;
 
                 if (audioBlob && audioContext && audioDestination) {
                     const arrayBuffer = await audioBlob.arrayBuffer();
@@ -167,9 +212,13 @@ export const createVideo = async ({
                     source.start();
                     activeAudioSources.add(source);
                 }
-                
-                await delay(durationMs);
 
+                if (isAnimationEnabled) {
+                    await animateImage(img, durationMs);
+                } else {
+                    drawStaticFrame(img);
+                    await delay(durationMs);
+                }
             } catch (e) {
                 recorder.stop();
                 reject(e);

@@ -105,6 +105,7 @@ const App: React.FC = () => {
   const [voiceStyle, setVoiceStyle] = useState('Narrate in a clear, documentary style');
   const [musicSuggestion, setMusicSuggestion] = useState<string>('');
   const [isMusicLoading, setIsMusicLoading] = useState(false);
+  const [isAnimationEnabled, setIsAnimationEnabled] = useState(true);
 
   const [estimatedTime, setEstimatedTime] = useState<string>('');
   const [scenes, setScenes] = useState<Scene[]>([]);
@@ -544,6 +545,7 @@ const App: React.FC = () => {
             orientation,
             quality: videoQuality,
             fileName,
+            isAnimationEnabled,
             onProgress: (current, total, task) => {
                 setProgress({ current, total, task });
             }
@@ -767,12 +769,18 @@ const App: React.FC = () => {
                           disabled={isLoading}
                         />
                     </div>
-                    <div className="md:col-span-2 lg:col-span-3">
-                        <label className="block text-sm font-medium text-text-secondary mb-1">Image Orientation</label>
-                        <div className="flex bg-background border border-card-border rounded-md p-1 space-x-1 max-w-xs">
-                            <button onClick={() => setOrientation('16:9')} disabled={isLoading} className={`w-1/2 rounded py-2 text-sm font-semibold transition-colors ${orientation === '16:9' ? 'bg-primary text-white' : 'text-text-secondary hover:bg-white/10'}`}>Horizontal (16:9)</button>
-                            <button onClick={() => setOrientation('9:16')} disabled={isLoading} className={`w-1/2 rounded py-2 text-sm font-semibold transition-colors ${orientation === '9:16' ? 'bg-primary text-white' : 'text-text-secondary hover:bg-white/10'}`}>Vertical (9:16)</button>
-                        </div>
+                    <div>
+                        <label htmlFor="orientation-select" className="block text-sm font-medium text-text-secondary mb-1">Image Aspect Ratio</label>
+                        <select
+                            id="orientation-select"
+                            value={orientation}
+                            onChange={(e) => setOrientation(e.target.value as '16:9' | '9:16')}
+                            disabled={isLoading}
+                            className="w-full bg-background border border-card-border rounded-md px-4 py-3 focus:ring-2 focus:ring-primary focus:outline-none transition-all"
+                        >
+                            <option value="16:9">▭ Horizontal (16:9)</option>
+                            <option value="9:16">▯ Vertical (9:16)</option>
+                        </select>
                     </div>
                   </div>
 
@@ -863,6 +871,22 @@ const App: React.FC = () => {
                             <option value="720p">HD (720p)</option>
                             <option value="1080p">Full HD (1080p)</option>
                           </select>
+                      </div>
+                       <div>
+                          <label className="block text-sm font-medium text-text-secondary mb-1">Video Effects</label>
+                           <div className="flex items-center justify-between bg-background border border-card-border rounded-md px-4 py-3">
+                              <span className={`text-sm ${isAnimationEnabled ? 'text-text-primary' : 'text-text-secondary'}`}>
+                                  Animate Static Images (Ken Burns)
+                              </span>
+                              <button
+                                onClick={() => setIsAnimationEnabled(!isAnimationEnabled)}
+                                disabled={isLoading}
+                                className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors ${isAnimationEnabled ? 'bg-primary' : 'bg-gray-600'}`}
+                                aria-label="Toggle image animation"
+                              >
+                                <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${isAnimationEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                              </button>
+                          </div>
                       </div>
                     </div>
                   </div>
